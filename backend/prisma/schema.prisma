@@ -1,0 +1,693 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// AUTH, ORGS, ROLES
+// ============================================================================
+
+model Organization {
+  id                String   @id @default(cuid())
+  name              String
+  stripeCustomerId  String?  @unique
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // Relations
+  locations         Location[]
+  users             UserOrganization[]
+  menuItems         MenuItem[]
+  inventoryItems    InventoryItem[]
+  orders            Order[]
+  customers         Customer[]
+  subscriptions     Subscription[]
+  events            Event[]
+
+  @@map("orgs")
+}
+
+model Location {
+  id             String @id @default(cuid())
+  organizationId String
+  name           String
+  timezone       String @default("UTC")
+  address        String?
+  phone          String?
+  isActive       Boolean @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tables         Table[]
+  orders         Order[]
+  staff          Staff[]
+
+  @@map("locations")
+}
+
+model User {
+  id        String @id @default(cuid())
+  email     String @unique
+  name      String
+  avatar    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  organizations UserOrganization[]
+  orders        Order[]
+  payments      Payment[]
+  events        Event[]
+
+  @@map("users")
+}
+
+model UserOrganization {
+  id             String @id @default(cuid())
+  organizationId String
+  userId         String
+  role           UserRole @default(EMPLOYEE)
+  isActive       Boolean @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@map("user_org_roles")
+}
+
+enum UserRole {
+  OWNER
+  MANAGER
+  BARTENDER
+  SERVER
+  KITCHEN
+  HOST
+  BUSSER
+  EMPLOYEE
+}
+
+// ============================================================================
+// CATALOG (MENU, CATEGORIES, RECIPES)
+// ============================================================================
+
+model Category {
+  id             String @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?
+  color          String @default("#8B0000")
+  sortOrder      Int @default(0)
+  isActive       Boolean @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  menuItems      MenuItem[]
+
+  @@map("categories")
+}
+
+model MenuItem {
+  id                String   @id @default(cuid())
+  organizationId    String
+  categoryId        String
+  name              String
+  description       String?
+  price             Decimal  @db.Decimal(10, 2)
+  cost              Decimal  @db.Decimal(10, 2)
+  preparationTime   Int      @default(5) // minutes
+  calories          Int?
+  alcoholContent    Decimal? @db.Decimal(5, 2) // ABV percentage
+  isVegetarian      Boolean  @default(false)
+  isVegan           Boolean  @default(false)
+  isGlutenFree      Boolean  @default(false)
+  isPopular         Boolean  @default(false)
+  isSignature       Boolean  @default(false)
+  isActive          Boolean  @default(true)
+  imageUrl          String?
+  allergens         String[] @default([])
+  tags              String[] @default([])
+  availability      Availability @default(ALWAYS)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // Relations
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  category          Category @relation(fields: [categoryId], references: [id])
+  recipe            Recipe?
+  orderItems        OrderItem[]
+  customizations    MenuItemCustomization[]
+
+  @@map("menu_items")
+}
+
+model MenuItemCustomization {
+  id          String @id @default(cuid())
+  menuItemId  String
+  name        String
+  options     String[] // JSON array of options
+  priceModifier Decimal @db.Decimal(10, 2) @default(0)
+  isRequired  Boolean @default(false)
+  sortOrder   Int @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  menuItem    MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+
+  @@map("menu_item_customizations")
+}
+
+model Recipe {
+  id          String @id @default(cuid())
+  menuItemId  String @unique
+  name        String
+  instructions String
+  yield       Int @default(1)
+  yieldUnit   String @default("serving")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  menuItem    MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  ingredients RecipeIngredient[]
+
+  @@map("recipes")
+}
+
+model RecipeIngredient {
+  id           String @id @default(cuid())
+  recipeId     String
+  inventoryItemId String
+  quantity     Decimal @db.Decimal(10, 4)
+  unit         String
+  notes        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  recipe       Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id])
+
+  @@map("recipe_ingredients")
+}
+
+enum Availability {
+  ALWAYS
+  SEASONAL
+  WEEKENDS
+  SPECIAL
+}
+
+// ============================================================================
+// INVENTORY
+// ============================================================================
+
+model InventoryItem {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  sku             String
+  category        String
+  currentStock    Decimal  @db.Decimal(10, 4) @default(0)
+  minStock        Decimal  @db.Decimal(10, 4) @default(0)
+  maxStock        Decimal  @db.Decimal(10, 4) @default(1000)
+  unit            String
+  costPerUnit     Decimal  @db.Decimal(10, 4)
+  barcode         String?  @unique
+  supplier        String?
+  location        String?
+  hasExpiration   Boolean  @default(false)
+  expirationDate  DateTime?
+  lastUpdated     DateTime @default(now())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  batches         InventoryBatch[]
+  adjustments     InventoryAdjustment[]
+  recipeIngredients RecipeIngredient[]
+
+  @@map("inventory_items")
+}
+
+model InventoryBatch {
+  id              String   @id @default(cuid())
+  inventoryItemId String
+  batchNumber     String
+  quantity        Decimal  @db.Decimal(10, 4)
+  costPerUnit     Decimal  @db.Decimal(10, 4)
+  supplier        String?
+  receivedAt      DateTime @default(now())
+  expirationDate  DateTime?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+
+  @@map("inventory_batches")
+}
+
+model InventoryAdjustment {
+  id              String   @id @default(cuid())
+  inventoryItemId String
+  type            AdjustmentType
+  quantity        Decimal  @db.Decimal(10, 4)
+  reason          String
+  notes           String?
+  adjustedBy      String
+  adjustedAt      DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  // Relations
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+
+  @@map("inventory_adjustments")
+}
+
+enum AdjustmentType {
+  RECEIVE
+  SALE
+  WASTE
+  ADJUSTMENT
+  TRANSFER
+}
+
+// ============================================================================
+// POS & KDS
+// ============================================================================
+
+model Table {
+  id         String @id @default(cuid())
+  locationId String
+  number     String
+  capacity   Int @default(4)
+  isActive   Boolean @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Relations
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  orders     Order[]
+
+  @@map("tables")
+}
+
+model Order {
+  id              String      @id @default(cuid())
+  organizationId  String
+  locationId      String
+  tableId         String?
+  customerId      String?
+  orderNumber     String      @unique
+  status          OrderStatus @default(OPEN)
+  orderType       OrderType   @default(DINE_IN)
+  subtotal        Decimal     @db.Decimal(10, 2) @default(0)
+  tax             Decimal     @db.Decimal(10, 2) @default(0)
+  tip             Decimal     @db.Decimal(10, 2) @default(0)
+  total           Decimal     @db.Decimal(10, 2) @default(0)
+  taxRate         Decimal     @db.Decimal(5, 4) @default(0.0875)
+  notes           String?
+  kitchenNotes    String?
+  allergyNotes    String?
+  priority        Priority    @default(NORMAL)
+  openedBy        String
+  openedAt        DateTime    @default(now())
+  closedBy        String?
+  closedAt        DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  location        Location @relation(fields: [locationId], references: [id])
+  table           Table? @relation(fields: [tableId], references: [id])
+  customer        Customer? @relation(fields: [customerId], references: [id])
+  items           OrderItem[]
+  payments        Payment[]
+  kdsTickets      KDSTicket[]
+
+  @@map("orders")
+}
+
+model OrderItem {
+  id          String   @id @default(cuid())
+  orderId     String
+  menuItemId  String
+  quantity    Int
+  unitPrice   Decimal  @db.Decimal(10, 2)
+  subtotal    Decimal  @db.Decimal(10, 2)
+  notes       String?
+  customizations Json?  // JSON object of customizations
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  order       Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItem    MenuItem @relation(fields: [menuItemId], references: [id])
+
+  @@map("order_items")
+}
+
+model KDSTicket {
+  id              String      @id @default(cuid())
+  orderId         String
+  ticketNumber    String      @unique
+  status          KDSStatus   @default(NEW)
+  priority        Priority    @default(NORMAL)
+  estimatedReadyTime DateTime?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  order           Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@map("kds_tickets")
+}
+
+model Payment {
+  id              String        @id @default(cuid())
+  orderId         String
+  userId          String
+  method          PaymentMethod
+  amount          Decimal       @db.Decimal(10, 2)
+  transactionId   String?       @unique
+  status          PaymentStatus @default(PENDING)
+  stripePaymentIntentId String?
+  metadata        Json?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  // Relations
+  order           Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  user            User @relation(fields: [userId], references: [id])
+
+  @@map("payments")
+}
+
+enum OrderStatus {
+  OPEN
+  PREPARING
+  READY
+  SERVED
+  CLOSED
+  CANCELLED
+}
+
+enum OrderType {
+  DINE_IN
+  TAKEOUT
+  DELIVERY
+}
+
+enum Priority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum KDSStatus {
+  NEW
+  PREPARING
+  READY
+  SERVED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  CONTACTLESS
+  MOBILE
+  SPLIT
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+// ============================================================================
+// LOYALTY & CUSTOMERS
+// ============================================================================
+
+model Customer {
+  id              String   @id @default(cuid())
+  organizationId  String
+  email           String?
+  phone           String?
+  name            String
+  loyaltyPoints   Int      @default(0)
+  totalSpent      Decimal  @db.Decimal(10, 2) @default(0)
+  visits          Int      @default(0)
+  lastVisit       DateTime?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  orders          Order[]
+  loyaltyEvents   LoyaltyEvent[]
+
+  @@map("customers")
+}
+
+model LoyaltyEvent {
+  id          String        @id @default(cuid())
+  customerId  String
+  type        LoyaltyEventType
+  points      Int
+  amount      Decimal?      @db.Decimal(10, 2)
+  orderId     String?
+  description String
+  createdAt   DateTime      @default(now())
+
+  // Relations
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@map("loyalty_events")
+}
+
+enum LoyaltyEventType {
+  EARN
+  REDEEM
+  ADJUSTMENT
+  EXPIRY
+}
+
+// ============================================================================
+// SUBSCRIPTIONS (STRIPE)
+// ============================================================================
+
+model Subscription {
+  id                String   @id @default(cuid())
+  organizationId    String   @unique
+  stripeSubscriptionId String @unique
+  status            SubscriptionStatus
+  plan              String
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  cancelAtPeriodEnd Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // Relations
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  UNPAID
+  TRIALING
+}
+
+// ============================================================================
+// SCHEDULING (PREMIUM)
+// ============================================================================
+
+model Staff {
+  id              String   @id @default(cuid())
+  organizationId  String
+  locationId      String
+  userId          String
+  role            UserRole
+  hourlyRate      Decimal  @db.Decimal(10, 2)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  location        Location @relation(fields: [locationId], references: [id])
+  availability    StaffAvailability[]
+  shifts          Shift[]
+
+  @@unique([organizationId, userId])
+  @@map("staff")
+}
+
+model StaffAvailability {
+  id        String @id @default(cuid())
+  staffId   String
+  dayOfWeek Int    // 0 = Sunday, 1 = Monday, etc.
+  startTime String // HH:MM format
+  endTime   String // HH:MM format
+  isAvailable Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  staff     Staff @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@unique([staffId, dayOfWeek])
+  @@map("staff_availability")
+}
+
+model Shift {
+  id          String      @id @default(cuid())
+  staffId     String
+  date        DateTime    @db.Date
+  startTime   String      // HH:MM format
+  endTime     String      // HH:MM format
+  role        UserRole
+  status      ShiftStatus @default(SCHEDULED)
+  notes       String?
+  actualStartTime DateTime?
+  actualEndTime   DateTime?
+  breakTime   Int?        // minutes
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  // Relations
+  staff       Staff @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@map("shifts")
+}
+
+enum ShiftStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+// ============================================================================
+// OFFLINE SYNC
+// ============================================================================
+
+model PendingOperation {
+  id              String @id @default(cuid())
+  organizationId  String
+  deviceId        String
+  uuid            String  @unique
+  table           String
+  operation       String  // insert, update, delete
+  payload         Json
+  createdAt       DateTime @default(now())
+
+  // Relations
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("pending_ops")
+}
+
+// ============================================================================
+// AUDIT & EVENTS
+// ============================================================================
+
+model Event {
+  id              String @id @default(cuid())
+  organizationId  String
+  userId          String?
+  type            String
+  entityType      String?
+  entityId        String?
+  description     String
+  metadata        Json?
+  ipAddress       String?
+  userAgent       String?
+  createdAt       DateTime @default(now())
+
+  // Relations
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user            User? @relation(fields: [userId], references: [id])
+
+  @@map("events")
+}
+
+// ============================================================================
+// MATERIALIZED VIEWS (for reports)
+// ============================================================================
+
+model SalesByDay {
+  id              String   @id @default(cuid())
+  organizationId  String
+  date            DateTime @db.Date
+  totalSales      Decimal  @db.Decimal(10, 2)
+  totalOrders     Int
+  averageOrderValue Decimal @db.Decimal(10, 2)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([organizationId, date])
+  @@map("mv_sales_by_day")
+}
+
+model TopItems {
+  id              String   @id @default(cuid())
+  organizationId  String
+  menuItemId      String
+  menuItemName    String
+  quantitySold    Int
+  revenue         Decimal  @db.Decimal(10, 2)
+  period          String   // daily, weekly, monthly
+  date            DateTime @db.Date
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([organizationId, menuItemId, period, date])
+  @@map("mv_top_items")
+}
+
+model LaborVsSales {
+  id              String   @id @default(cuid())
+  organizationId  String
+  date            DateTime @db.Date
+  totalSales      Decimal  @db.Decimal(10, 2)
+  totalLaborHours Decimal  @db.Decimal(5, 2)
+  laborCost       Decimal  @db.Decimal(10, 2)
+  laborPercentage Decimal  @db.Decimal(5, 2)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([organizationId, date])
+  @@map("mv_labor_vs_sales")
+}
